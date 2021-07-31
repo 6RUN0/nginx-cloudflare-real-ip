@@ -1,0 +1,15 @@
+[Unit]
+Description=Nginx clouflare config update
+#Documentation=
+ConditionACPower=true
+
+[Service]
+Type=oneshot
+ExecStart=/opt/nginx-cloudflare-real-ip/nginx-cloudflare-config /etc/nginx
+
+PrivateDevices=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectSystem=full
+RestrictRealtime=true

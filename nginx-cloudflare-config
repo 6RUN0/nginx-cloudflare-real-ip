@@ -1,0 +1,175 @@
+#!/bin/sh
+
+WGET=`which wget`
+CURL=`which curl`
+HASH_PROGRAM=`which md5sum`
+
+MY_NAME="$0"
+NGINX_CONFIG_DIRECTORY=$*
+NGINX_CONFIG_CONF_D="$NGINX_CONFIG_DIRECTORY/conf.d/"
+NGINX_CONFIG_SNIPPETS="$NGINX_CONFIG_DIRECTORY/snippets/"
+NGINX_CONFIG_REALIP_CLOUDFLARE="$NGINX_CONFIG_CONF_D/00_realip_cloudflare.conf"
+NGINX_CONFIG_GEO_CLOUDFLARE="$NGINX_CONFIG_CONF_D/10_geo_cloudflare.conf"
+NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE="$NGINX_CONFIG_SNIPPETS/allow_only_cloudflare.conf"
+
+print_help() {
+  cat <<_EOF_
+
+Usage
+  $MY_NAME <path to the root directory with the nginx configuration>
+
+_EOF_
+}
+
+if [ -z "$NGINX_CONFIG_DIRECTORY" ]; then
+  echo "Error: specify the path to the root directory with the nginx configuration"
+  print_help
+  exit 1
+fi
+
+if [ ! -d "$NGINX_CONFIG_DIRECTORY" ]; then
+  echo "Error: '$NGINX_CONFIG_DIRECTORY' is not directory"
+  exit 1
+fi
+
+new_dir() {
+  directory_path=$*
+  if [ ! -d "$directory_path" ]; then
+    mkdir -v -p "$directory_path"
+    if [ ! -d "$directory_path" ]; then
+      echo "Error: failed to create the directory '$directory_path'"
+      exit 1
+    fi
+  fi
+}
+
+fetch() {
+  fetch_url=$*
+  if [ -x "$WGET" ]; then
+    $WGET "$fetch_url" -q -O -
+  elif [ -x "$CURL" ]; then
+    $CURL "$fetch_url"
+  else
+    echo "Error: wget or curl not found"
+    exit 1
+  fi
+}
+
+file_hash() {
+  file_path=$*
+  if [ -x "$HASH_PROGRAM" ]; then
+    $HASH_PROGRAM "$file_path" | awk '{ print $1 }'
+  else
+    echo "Error: '$HASH_PROGRAM' not found"
+    exit 1
+  fi
+}
+
+new_dir "$NGINX_CONFIG_CONF_D"
+new_dir "$NGINX_CONFIG_SNIPPETS"
+
+echo "$NGINX_CONFIG_DIRECTORY"
+echo "$NGINX_CONFIG_CONF_D"
+echo "$NGINX_CONFIG_SNIPPETS"
+echo "$NGINX_CONFIG_REALIP_CLOUDFLARE"
+echo "$NGINX_CONFIG_GEO_CLOUDFLARE"
+echo "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE"
+
+config_is_changed=0
+hash_old_realip_config=""
+hash_old_geo_config=""
+hash_old_allow_only_config=""
+
+if [ -f "$NGINX_CONFIG_REALIP_CLOUDFLARE" ]; then
+  hash_old_realip_config=`file_hash "$NGINX_CONFIG_REALIP_CLOUDFLARE"`
+fi
+
+if [ -f "$NGINX_CONFIG_GEO_CLOUDFLARE" ]; then
+  hash_old_geo_config=`file_hash "$NGINX_CONFIG_GEO_CLOUDFLARE"`
+fi
+
+if [ -f "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE" ]; then
+  hash_old_allow_only_config=`file_hash "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE"`
+fi
+
+cat > "$NGINX_CONFIG_REALIP_CLOUDFLARE" <<_EOF_
+
+#
+# Cloudflare realip configuration
+#
+
+_EOF_
+
+cat > "$NGINX_CONFIG_GEO_CLOUDFLARE" <<_EOF_
+
+#
+# Cloudflare geo configuration
+#
+
+geo \$not_cloudflare {
+    default 1;
+_EOF_
+
+cat > "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE" <<_EOF_
+
+#
+# Pass only cloudflare
+#
+
+if (\$not_cloudflare) {
+    return 403;
+}
+_EOF_
+
+if [ ! -f "$NGINX_CONFIG_GEO_CLOUDFLARE" ]; then
+  echo "Error: failed to create the file '$NGINX_CONFIG_GEO_CLOUDFLARE'"
+  exit 1
+fi
+
+if [ ! -f "$NGINX_CONFIG_REALIP_CLOUDFLARE" ]; then
+  echo "Error: failed to create the file '$NGINX_CONFIG_REALIP_CLOUDFLARE'"
+  exit 1
+fi
+
+if [ ! -f "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE" ]; then
+  echo "Error: failed to create the file '$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE'"
+  exit 1
+fi
+
+echo "# IPv4" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+echo "    # IPv4" >> $NGINX_CONFIG_GEO_CLOUDFLARE;
+for i in `fetch https://www.cloudflare.com/ips-v4`; do
+  echo "set_real_ip_from $i;" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+  echo "    $i 0;" >> $NGINX_CONFIG_GEO_CLOUDFLARE;
+done
+echo "" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+echo "# IPv6" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+echo "    # IPv6" >> $NGINX_CONFIG_GEO_CLOUDFLARE;
+for i in `fetch https://www.cloudflare.com/ips-v6`; do
+  echo "set_real_ip_from $i;" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+  echo "    $i 0;" >> $NGINX_CONFIG_GEO_CLOUDFLARE;
+done
+echo "" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+echo "real_ip_header CF-Connecting-IP;" >> $NGINX_CONFIG_REALIP_CLOUDFLARE;
+echo "}" >> $NGINX_CONFIG_GEO_CLOUDFLARE;
+
+hash_new_realip_config=`file_hash "$NGINX_CONFIG_REALIP_CLOUDFLARE"`
+hash_new_geo_config=`file_hash "$NGINX_CONFIG_GEO_CLOUDFLARE"`
+hash_new_allow_only_config=`file_hash "$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE"`
+
+if [ "x$hash_new_realip_config" != "x$hash_old_realip_config" ]; then
+  config_is_changed=1
+  echo "Info: the file '$NGINX_CONFIG_REALIP_CLOUDFLARE' has been changed"
+fi
+
+if [ "x$hash_new_geo_config" != "x$hash_old_geo_config" ]; then
+  config_is_changed=1
+  echo "Info: the file '$NGINX_CONFIG_GEO_CLOUDFLARE' has been changed"
+fi
+
+if [ "x$hash_new_allow_only_config" != "x$hash_old_allow_only_config" ]; then
+  config_is_changed=1
+  echo "Info: the file '$NGINX_CONFIG_ALLOW_OLNY_CLOUDFLARE' has been changed"
+fi
+
+[ $config_is_changed -eq 1 ] && nginx -t && systemctl reload nginx

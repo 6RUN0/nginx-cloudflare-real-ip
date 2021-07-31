@@ -1,0 +1,1 @@
+0 * * * * [ -x /opt/nginx-cloudflare-real-ip/nginx-cloudflare-config ] && /opt/nginx-cloudflare-real-ip/nginx-cloudflare-config /etc/nginx
